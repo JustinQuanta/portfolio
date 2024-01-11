@@ -1,0 +1,623 @@
+---
+title: "DA1d01 Optimisation for Decision-Making Project"
+author: "Justin Chan"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+pacman::p_load(lpSolve, magrittr, tidyverse, waffle, magrittr, hrbrthemes, flexdashboard, sf, rvest, leaflet)
+
+```
+
+Suppose I have **\$10,000** to invest, and I have four different financial instruments for structuring my investment. These are as follows:
+
+1. Buy stock P, which is currently selling at **\$20** per share.
+2. Raise more funds for investment immediately by selling put options to buy 100 shares of stock P at **\$15**, which expires exactly 6 months from now. The options premium are selling today for **\$175** per contract.
+3. Purchase call options to buy 100 shares of stock P at **\$15**, which expires exactly 6 months from now. The options premium are selling today for **\$600** per contract.
+4. Raise more funds for investment immediately by selling call options to sell 100 shares of stock P at **\$30**, which expires exactly 6 months from now. The options premium are selling today for **\$200** per contract.
+
+
+**This information is for general purposes only and should not be considered financial advice. Before making any investment decisions, consult a qualified financial professional and conduct your own due diligence.**
+
+# Case study {data-navmenu="Portfolio Optimisation"}
+
+**<font size=14> Scenarios </font>**
+
+Suppose there are three equally likely scenarios that may occur to the stock price of **stock P** in the next 6 months:
+
+1. Stock P is worth \$35 per share.
+2. Stock P stays flat at \$20 per share.
+3. Stock P is worth \$10 per share.
+
+Due to the significant risks associated with selling options, the exchange has imposed a margin requirement on the total number of calls and puts on stock P that I can sell. For every put options contract I wrote, I need to have around \$150 required in my cash. And for every call options contract I wrote, I need to have around \$300 required in my cash. ([Link to calculate margin requirements](https://my.aeromir.com/go/c.naked-option-margin-calculator)).
+
+Therefore, with these scenarios in mind, we can formulate an optimisation problem to maximise my expected profit in the next 6 months.
+
+
+# Optimisation Problem {data-navmenu="Portfolio Optimisation"}
+
+**<font size=14> Optimisation problem </font>**
+
+Row {.tabset}
+----------------
+
+### Decision variables {data-height=5}
+
+These are the variables to be determined.
+
+* $S$ = the number of stock P purchased.
+* $T$ = the number of put options sold (per contract basis).
+* $C_1$ = the number of call options purchased (per contract basis).
+* $C_2$ = the number of call options sold (per contract basis).
+
+### Objective function {data-height=1000}
+
+The objective here is to maximise the expected profit from the portfolio. To determine this, we must determine the expected profit from each of the investment alternatives.
+
+#### **1. Stock**:
+The profit on the stock depends on the three equally likely scenarios. In scenario 1, the profit is \$15 and this happens with probability $\frac{1}{3}$. In scenario 2, the profit is \$0, and this happens with probability $\frac{1}{3}$. In scenario 3, the profit is \$-10, and this happens with probability $\frac{1}{3}$. Hence, the expected profit on one stock of P is
+\[ \frac{1}{3}(15) + \frac{1}{3}(0) + \frac{1}{3}(-10) = \$1.67\]
+
+#### **2. Put options sold**:
+Again, the profit on the put options sold depends on the three equally likely scenarios. 
+
+In scenario 1, the option expires worthless and we profit $175 from the contract.
+
+In scenario 2, the option also expires worthless and we profit $175 from the contract.
+
+In scenario 3, the buyer exercise the option and we are obligated sell the stock at $15, the net profit will be (\$10 - \$15)*100 + \$175 =  -\$325.
+
+Thus, the expected profit from the sale of a put option is
+\[ \frac{1}{3}(175) + \frac{1}{3}(175) + \frac{1}{3}(-325) = \$8.33\]
+
+#### **3. Call options bought**:
+The profit on the call options bought depends on the three equally likely scenarios.
+
+In scenario 1, we exercise the option and buy the stock at $15, the net profit will be (\$35 - \$15)*100 - \$600 =  \$1400.
+
+In scenario 2, we also exercise the option and buy the stock at $15, the net profit will be (\$20 - \$15)*100 - \$600 = -\$100.
+
+In scenario 3, the option expires worthless and we lost -\$600 from the contract.
+
+Overall, the expected profit from the purchase of a call option is
+\[\frac{1}{3}(1400) + \frac{1}{3}(-100) + \frac{1}{3}(-600) = \$233.33\]
+
+#### **4. Call options sold**:
+The profit on the call options sold depends on the three equally likely scenarios.
+
+In scenario 1, the buyer exercises the option and we are obligated to buy the stock at $30, the net profit will be (\$30 - \$35)*100 + \$200 =  -\$300.
+
+In scenario 2, the option expires worthless and we profit \$200 from the contract.
+
+In scenario 3, the option expires worthless and we also profit \$200 from the contract.
+
+Overall, the expected profit from the purchase of a call option is
+\[\frac{1}{3}(-300) + \frac{1}{3}(200) + \frac{1}{3}(200) = \$33.33\]
+
+
+Combining everything, we have the objective function in this problem, which is:
+\[ 1.67S + 8.33T + 233.33C_1 + 33.33C_2\]
+
+### Constraints {data-height=100}
+
+To determine the explicit constraints, we have the:
+
+i. **Budget Constraint**: $20S + 600C_1 \leq 10000 + 175T + 200C_2$
+ii. **Margin Constraint**: $150T + 300C_2 \leq 10000$
+
+To determine the implicit constraints, we need all the decision variables to be positive.
+\[S\geq 0, T\geq 0, C_1\geq 0, C_2\geq 0\]
+
+### Formulation {data-height=100}
+
+The optimisation problem will be in the following form:
+\begin{align*}
+\text{max}\{S,T,C_1,C_2\} & \hspace{1cm} 1.67S + 8.33T + 233.33C_1 + 33.33C_2 \\
+\text{s.t.} \hspace{0.5cm} & \hspace{1cm} 20S + 600C_1 \leq 10000 + 175T + 200C_2 \\
+            & \hspace{1cm} 150T + 300C_2 \leq 10000 \\
+            & \hspace{1cm} S\geq 0, T\geq 0, C_1\geq 0, C_2\geq 0
+\end{align*}
+
+where:
+
+* $S$ represents the stock.
+* $T$ represents the put options.
+* $C_1$ represents the call options bought.
+* $C_2$ represents the call options sold.
+
+The objective function maximises the expected profit, and the constraints ensure that the investment remains within specified limits.
+
+# LP algorithm \#1 {data-navmenu="Linear Programming"}
+
+**<font size=14> LP algorithm </font>**
+
+We then apply the optimisation problem to the linear programming algorithm using the following R code:
+
+```{r}
+c <- c(1.67, 8.33, 233.33, 33.33)
+A <- matrix(c(20, -175, 600, -200,
+              0,150,0,300,
+              1,0,0,0,
+              0,1,0,0,
+              0,0,1,0,
+              0,0,0,1), nrow=6, byrow=TRUE)
+b <- c(10000,10000,0,0,0,0)
+d <- c("<=","<=",">=",">=",">=",">=")
+
+results <- lp("max",c,A,d,b)
+results$solution
+results$objval
+```
+The solution to this linear programming problem is as follows:
+
+* $S$ = 0
+* $T$ = 66.67
+* $C_1$ = 36.11
+* $C_2$ = 0
+
+The optimal value yields an expected profit of \$8981.14. 
+
+It's crucial to note that this value represents the *expected* profit.  In the event that scenario 3 actually occurs, a **loss** of about **\$43,334.40** would be incurred.
+
+\[ -10S -325T -600C_1 = -10*0 -325*66.67 - 600*36.11 = -$43,334.40\]
+
+# LP algorithm \#2 {data-navmenu="Linear Programming"}
+
+**<font size=14> A more realistic approach </font>**
+
+Often, it's prudent to ensure ownership of 100 shares of a stock before selling a call option. This guarantees that, if the stock price surpasses your strike price at DTE, you are obligated to sell the 100 shares at the specified strike price, avoiding reliance on margins.
+
+We refined our Linear Programming model as follows:
+\begin{align*}
+\text{max}\{S,T,C_1,C_2\} & \hspace{1cm} 1.67S + 8.33T + 233.33C_1 + 33.33C_2 \\
+\text{s.t.} \hspace{0.5cm} & \hspace{1cm} 20S + 600C_1 \leq 10000 + 175T + 200C_2 \\
+            & \hspace{1cm} 150T + 300C_2 \leq 10000 \\
+            & \hspace{1cm} S\geq 100, T\geq 0, C_1\geq 0, C_2\geq 0
+\end{align*}
+
+Applying this problem to the linear programming algorithm, we obtain:
+
+```{r}
+c <- c(1.67, 8.33, 233.33, 33.33)
+A <- matrix(c(20, -175, 600, -200,
+              0,150,0,300,
+              1,0,0,0,
+              0,1,0,0,
+              0,0,1,0,
+              0,0,0,1), nrow=6, byrow=TRUE)
+b <- c(10000,10000,100,0,0,0)
+d <- c("<=","<=",">=",">=",">=",">=")
+
+results <- lp("max",c,A,d,b)
+results$solution
+results$objval
+```
+The solution of this LP yields:
+
+* $S$ = 100
+* $T$ = 66.67
+* $C_1$ = 32.78
+* $C_2$ = 0
+
+with an optimal value providing an expected profit of **\$8370.37**.
+
+While the *expected* profit experiences a slight decrease, in the event that scenario 3 materialises, we incur a slightly lesser **loss** of about **\$42,335.80** -- approximately \$1,000 less than the previous case.
+
+\[ -10S -325T -600C_1 = -10*100 -325*66.67 - 600*32.78 = -$42,335.80\]
+
+However, the solution does not favor the selling of call options. This aligns with real-life scenarios where individuals often opt to sell covered calls instead of naked calls.
+
+(**Did you know?** Institutions typically utilise covered call options as a hedging strategy.)
+
+# LP algorithm \#3 {data-navmenu="Linear Programming"}
+
+**<font size=14> An even more realistic approach </font>**
+
+In real-life scenarios, we typically anticipate positive returns in our portfolio during market upswings through strategic investments. However, there are also occasions when the stock market experiences a decline, leading to unrealized losses that investors must be prepared to tolerate. Therefore, determining the acceptable level of loss in our portfolio is equally crucial.
+
+To address this, we introduce constraints for each scenario. In Scenario 1, where we expect an actual profit of at least $2,000, we introduce the constraint: 
+\[ 35S + 2000C_1 -500C_2 \geq 12000\]
+
+For Scenario 2, where we anticipate a flat return with no profit or loss, the constraint becomes:
+\[ 20S + 500C_1 \geq 10000\]
+
+In the event of Scenario 3, where we are willing to tolerate a loss of at most $2,000, the constraint is:
+\[10S -500T \geq 8000\]
+
+These lower bounding constraints will be incorporated into the Linear Programming model as follows:
+\begin{align*}
+\text{max}\{S,T,C_1,C_2\} & \hspace{1cm} 1.67S + 8.33T + 233.33C_1 + 33.33C_2 \\
+\text{s.t.} \hspace{0.5cm} & \hspace{1cm} 20S + 600C_1 \leq 10000 + 175T + 200C_2 \\
+            & \hspace{1cm} 35S + 2000C_1 -500C_2 \geq 12000 \\
+            & \hspace{1cm} 20S + 500C_1 \geq 10000 \\
+            & \hspace{1cm} 10S -500T \geq 8000 \\
+            & \hspace{1cm} 150T + 300C_2 \leq 10000 \\
+            & \hspace{1cm} S\geq 100, T\geq 0, C_1\geq 0, C_2\geq 0
+\end{align*}
+
+```{r}
+c2 <- c(1.67, 8.33, 233.33, 33.33)
+A2 <- matrix(c(20, -175, 600, -200,
+              35, 0, 2000, -500,
+              20, 0, 500, 0,
+              10, -500, 0, 0,
+              0,150,0,300,
+              1,0,0,0,
+              0,1,0,0,
+              0,0,1,0,
+              0,0,0,1), nrow=9, byrow=TRUE)
+b2 <- c(10000,12000,10000,8000,10000,100,0,0,0)
+d2 <- c("<=",">=",">=",">=","<=",">=",">=",">=",">=")
+
+results2 <- lp("max",c2,A2,d2,b2)
+results2$solution
+results2$objval
+```
+The solution of this LP results in:
+
+* $S$ = 800
+* $T$ = 0
+* $C_1$ = 1.11
+* $C_2$ = 33.33
+
+The optimal value provides an expected profit of **\$2706.26**.
+
+Compared to the previous case studies, the *expected* profit has significantly decreased.  However, in the worst-case scenario (scenario 3), we would only incur a loss of about **\$2,000**, as previously set:
+
+\[-10S -600C_1 + 200c_2= -10*800 -600*1.11 + 200*33.33 = -$2,000\]
+
+
+# LP algorithm \#4 {data-navmenu="Linear Programming"}
+
+**<font size=14> Optimist, Realist or Pessimist? </font>**
+
+In the end, it boils down to your risk tolerance. Are you an optimist, embracing risk for the potential of higher returns? Perhaps you identify as a realist, navigating the market with the understanding that it fluctuates around the current price. Alternatively, are you a pessimist, averse to risk even if it means accepting a lower return?
+
+Row {.tabset}
+----------------
+
+### Optimist approach {data-height=1000}
+
+As an optimist, you anticipate the stock price of stock P reaching \$35 in the next 6 months. Consequently, your optimization problem is revised as follows:
+
+\begin{align*}
+\text{max}\{S,T,C_1,C_2\} & \hspace{1cm} 35S + 2000C_1 - 500C_2 \\
+\text{s.t.} \hspace{0.5cm} & \hspace{1cm} 20S + 600C_1 \leq 10000 + 175T + 200C_2 \\
+            & \hspace{1cm} 150T + 300C_2 \leq 10000 \\
+            & \hspace{1cm} S\geq 100, T\geq 0, C_1\geq 0, C_2\geq 0
+\end{align*}
+
+```{r, echo=FALSE}
+c3 <- c(35, 0, 2000, -500)
+A3 <- matrix(c(20, -175, 600, -200,
+              0,150,0,300,
+              1,0,0,0,
+              0,1,0,0,
+              0,0,1,0,
+              0,0,0,1), nrow=6, byrow=TRUE)
+b3 <- c(10000,10000,100,0,0,0)
+d3 <- c("<=","<=",">=",">=",">=",">=")
+
+results3 <- lp("max",c3,A3,d3,b3)
+results3$solution
+results3$objval
+```
+
+The solution of this LP yields:
+
+* $S$ = 100
+* $T$ = 66.67
+* $C_1$ = 32.78
+* $C_2$ = 0
+
+The optimal value results in a maximum profit of **\$69,055.56**.
+
+This demonstrates that in a bull market, investors have the option to either buy the stock, sell put options, buy call options, or employ a combination of these strategies to capitalize on profit opportunities!
+
+### Realist approach {data-height=1000}
+
+As a realist, you navigate with the expectation that the stock price of stock P fluctuates around the current price, \$20. Consequently, your optimization problem is revised as follows:
+
+\begin{align*}
+\text{max}\{S,T,C_1,C_2\} & \hspace{1cm} 20S + 500C_1 \\
+\text{s.t.} \hspace{0.5cm} & \hspace{1cm} 20S + 600C_1 \leq 10000 + 175T + 200C_2 \\
+            & \hspace{1cm} 150T + 300C_2 \leq 10000 \\
+            & \hspace{1cm} S\geq 100, T\geq 0, C_1\geq 0, C_2\geq 0
+\end{align*}
+```{r, echo=FALSE}
+c4 <- c(20, 0, 500, 0)
+A4 <- matrix(c(20, -175, 600, -200,
+              0,150,0,300,
+              1,0,0,0,
+              0,1,0,0,
+              0,0,1,0,
+              0,0,0,1), nrow=6, byrow=TRUE)
+b4 <- c(10000,10000,100,0,0,0)
+d4 <- c("<=","<=",">=",">=",">=",">=")
+
+results4 <- lp("max",c4,A4,d4,b4)
+results4$solution
+results4$objval
+```
+
+The solution of this LP yields:
+
+* $S$ = 1083.33
+* $T$ = 66.67
+* $C_1$ = 0
+* $C_2$ = 0
+
+The optimal value results in a maximum profit of **\$21.666.67**.
+
+Even in an anticipated flat market, a lucrative profit can be achieved by strategically selling put options!
+
+
+### Pessimist approach {data-height=1000}
+
+As a pessimist, you are risk-averse and assume a worst-case scenario, where the stock price of stock P drops to \$10 in the next 6 months. Accordingly, your optimization problem is modified to:
+
+\begin{align*}
+\text{max}\{S,T,C_1,C_2\} & \hspace{1cm} 10S - 500T \\
+\text{s.t.} \hspace{0.5cm} & \hspace{1cm} 20S + 600C_1 \leq 10000 + 175T + 200C_2 \\
+            & \hspace{1cm} 150T + 300C_2 \leq 10000 \\
+            & \hspace{1cm} S\geq 100, T\geq 0, C_1\geq 0, C_2\geq 0
+\end{align*}
+
+```{r, echo=FALSE}
+c5 <- c(10, -500, 0, 0)
+A5 <- matrix(c(20, -175, 600, -200,
+              0,150,0,300,
+              1,0,0,0,
+              0,1,0,0,
+              0,0,1,0,
+              0,0,0,1), nrow=6, byrow=TRUE)
+b5 <- c(10000,10000,100,0,0,0)
+d5 <- c("<=","<=",">=",">=",">=",">=")
+
+results5 <- lp("max",c5,A5,d5,b5)
+results5$solution
+results5$objval
+```
+
+The solution of this LP yields:
+
+* $S$ = 833.33
+* $T$ = 0
+* $C_1$ = 0
+* $C_2$ = 33.33
+
+The optimal value results in a maximum profit of **\$8333.33**.
+
+During a bear market, investors typically resort to hedging or shorting the market. As an investor, the recommended strategy is to sell call options while maintaining ownership of the stock!
+
+
+# Concluding Remarks {data-navmenu="Discussion"}
+
+Row {.tabset}
+----------------
+
+### Discussion {data-height=1000}
+
+1. Optimization Strategy:
+
+* Discuss the algorithm's strategy for balancing risk and return in different market scenarios.
+
+2. Risk Tolerance and Market Conditions:
+
+* Explore how the algorithm caters to varying risk tolerances and adapts to bullish, flat, or bearish market conditions.
+
+3. Effectiveness of the Framework:
+
+* Evaluate the optimization framework's efficacy in achieving desired outcomes for investors.
+
+4. Reproducibility and Versatility:
+
+* The framework introduced is reproducible and versatile, it can adapt to different price values provided.
+
+
+### Limitations {data-height=1000}
+
+1. Market Assumptions:
+
+* Acknowledge any assumptions made about the market, and discuss the potential limitations or deviations from real-world conditions.
+
+2. Option Pricing Model:
+
+* Highlight the specific option pricing model used in the algorithm and discuss its limitations. Consider the impact of changing volatility and other factors on option pricing accuracy.
+
+3. Transaction Costs:
+
+* Address the issue of transaction costs and brokerage fees. Discuss how these costs may affect the profitability of the proposed strategy.
+
+4. Margin Requirements:
+
+* Discuss the potential challenges associated with meeting margin requirements, especially in scenarios where large positions are taken.
+
+### Suggestions for future work {data-height=1000}
+
+1. Stochastic Programming Integration:
+
+* Explore integrating stochastic programming to enhance the model's ability to handle market uncertainties.
+
+2. Dynamic Model and Machine Learning:
+
+* Investigate developing a dynamic model with machine learning for real-time adaptation to changing market conditions.
+
+3. User Customization and Personalization:
+
+* Explore allowing users to customize risk parameters within the algorithm for a personalized approach.
+
+4. Backtesting and Validation:
+
+* Suggest conducting extensive backtesting and validation exercises to assess the algorithm's historical performance.
+
+5. Sensitivity Analysis with Stochastic Elements:
+
+* Perform sensitivity analysis with stochastic elements to assess the model's adaptability to varying market conditions.
+
+
+# What is a stock option {data-navmenu="US Stock Options"}
+
+**<font size=14> What is a stock option? </font>**
+
+A stock option (also known as an equity option), gives an investor the right, but not the obligation, to buy or sell a stock at an agreed-upon price and date. 
+
+Understanding US stock options involves three key concepts:
+
+1. **Expiration Dates (Days to Expiration - DTE)**: All options come with expiration dates, denoted as days to expiration (DTE).
+2. **Strike Price**: Each option has a 'Strike Price,' a pre-set price at which the stock can be bought or sold.
+3. **Option Contract Multiplier**: The option contract multiplier indicates that one contract equals 100 shares.
+
+There are two primary types of options:
+
+* **Puts**: These are bets that the stock will fall.
+* **Calls**: These are bets that the stock will rise.
+
+# Call options {data-navmenu="US Stock Options"}
+
+**<font size=14> Call options </font>**
+
+Call options provide the right (but not the obligation) to buy 100 shares of stock at a specified price. As the stock price rises, the value of a call option increases.
+
+Imagine you want to buy a house for $200,000, but you believe its value will rise in the next 2 years.
+
+Row {data-height=400}
+----------------
+
+### **As a call option buyer** {data-width=500}
+
+You purchase a call option for $10,000, giving you the right to buy the house at $200,000 within the next 2 years.
+
+* **Strike Price**: $200,000
+* **Option Expiration**: 2 Years
+* **Option Premium**: $10,000 (This is the price of the contract)
+
+After 2 years:
+
+i. If the house value rises to $250,000
+
+You can "exercise" the option, buying the house for $200,000.
+
+* **Purchase Price**: $200,000
+* **Asset Value**: $250,000
+* **Profit**: $50,000 - $10,000 (**Option Premium**) = $40,000 (**Net Profit**)
+
+ii. If the house value stays the same or decreases to $150,000:
+
+* The contract expires worthless
+* **Loss**: $10,000 (**Option Premium**)
+
+### **As a call option seller** {data-width=500}
+You sell a call option for $10,000. You are obligated to sell the house at $200,000 within the next 2 years.
+
+* **Strike Price**: $200,000
+* **Option Expiration**: 2 Years
+* **Option Premium Received**: $10,000 (This is the price of the contract)
+
+After 2 years:
+
+i. If the house value rises to $250,000:
+
+The buyer may exercise the option, and you must sell at $200,000.
+
+* **Sale Price**: $200,000
+* **Asset Value**: $250,000
+* **Loss**: $50,000 - $10,000 (**Option Premium Received**) = $40,000 (**Net Loss**)
+
+ii. If the house value stays the same or decreases to $150,000:
+
+* The option expires worthless, and you keep the premium.
+* **Profit**: $10,000 (**Option Premium Received**)
+
+
+# Put options {data-navmenu="US Stock Options"}
+
+**<font size=14> Put options </font>**
+
+Put options provide the right (but not the obligation) to sell 100 shares of stock at a specified price. The value of a put option increases as the stock price falls.
+
+Suppose you own a house valued at $200,000, but you expect its value to decrease in the next 2 years.
+
+Row {data-height=400}
+----------------
+
+### As a Put Option Buyer {data-width=500}
+You purchase a put option for $10,000, giving you the right to sell the house at $200,000 within the next 2 years.
+
+* **Strike Price**: $200,000
+* **Option Expiration**: 2 Years
+* **Option Premium**: $10,000
+
+After 2 years:
+
+i. If the house value falls to $150,000:
+
+You can "exercise" the option, selling the house for $200,000.
+
+* **Sale Price**: $200,000
+* **Asset Value**: $150,000
+* **Profit**: $50,000 - $10,000 (**Option Premium**) = $40,000 (**Net Profit**)
+
+ii. If the house value stays the same or increases to $250,000:
+
+* The contract expires worthless.
+* **Loss**: $10,000 (**Option Premium**)
+
+### As a Put Option Seller {data-width=500}
+
+You sell a put option for $10,000. You are obligated to buy the house at $200,000 within the next 2 years.
+
+* **Strike Price**: $200,000
+* **Option Expiration**: 2 Years
+* **Option Premium Received**: $10,000
+
+After 2 years:
+
+i. If the house value falls to $150,000:
+
+The buyer may exercise the option, and you must buy the house at $200,000.
+
+* **Purchase Price**: $200,000
+* **Asset Value**: $150,000
+* **Loss**: $50,000 - $10,000 (**Option Premium Received**) = $40,000 (**Net Loss**)
+
+ii. If the house value stays the same or increases to $250,000:
+
+* The option expires worthless, and you keep the premium.
+* **Profit**: $10,000 (**Option Premium Received**)
+
+
+# Decision Theory {data-navmenu="Appendix"}
+
+**<font size=14> Decision Theory </font>**
+
+There are four types of criteria that we will look at.
+
+* **Expected Value** (Realist)
+Compute the expected value under each action and then pick the action with the largest expected value. This is the only method of the four that incorporates the probabilities of the states of nature. The expected value criterion is also called the Bayesian principle.
+
+* **Maximax** (Optimist)
+The maximax looks at the best that could happen under each action and then chooses the action with the largest value. They assume that they will get the most possible and then they take the action with the best best case scenario. The maximum of the maximums or the "best of the best". This is the lotto player; they see large payoffs and ignore the probabilities.
+
+* **Maximin** (Pessimist)
+The maximin person looks at the worst that could happen under each action and then choose the action with the largest payoff. They assume that the worst that can happen will, and then they take the action with the best worst case scenario. The maximum of the minimums or the "best of the worst". This is the person who puts their money into a savings account because they could lose money at the stock market.
+
+* **Minimax** (Opportunist)
+Minimax decision making is based on opportunistic loss. They are the kind that look back after the state of nature has occurred and say "Now that I know what happened, if I had only picked this other action instead of the one I actually did, I could have done better". So, to make their decision (before the event occurs), they create an opportunistic loss (or regret) table. Then they take the minimum of the maximum. That sounds backwards, but remember, this is a loss table. This similar to the maximin principle in theory; they want the best of the worst losses.
+
+
+# Reference {data-navmenu="Appendix"}
+
+**<font size=14> Reference </font>**
+
+Credits to:
+
+1. Kevin/Qian Jiang for helping me out with the understanding of the different scenarios
+2. Linear Programming and Its Application Techniques in Optimizing Portfolio Selection of a Firm: https://www.hindawi.com/journals/jam/2020/8817909/
+3. Portfolio Modelling Using LPs: https://sites.math.washington.edu/~burke/crs/408/notes/fin/port-lp-mod.pdf
